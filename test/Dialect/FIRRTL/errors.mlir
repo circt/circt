@@ -91,6 +91,17 @@ firrtl.circuit "Foo" {
 // -----
 
 firrtl.circuit "Foo" {
+  firrtl.module @Foo(in %clk: !firrtl.clock, in %reset: !firrtl.asyncreset) {
+    // expected-error @+3 {{register with async reset requires constant reset value}}
+    // expected-note @+1 {{reset value defined here:}}
+    %w = firrtl.wire : !firrtl.uint<1>
+    %a = firrtl.regreset %clk, %reset, %w {name = "a"} : (!firrtl.clock, !firrtl.asyncreset, !firrtl.uint<1>) -> !firrtl.uint<1>
+  }
+}
+
+// -----
+
+firrtl.circuit "Foo" {
 
   // expected-error @+1 {{'firrtl.extmodule' op attribute 'defname' with value "Bar" conflicts with the name of another module in the circuit}}
   firrtl.extmodule @Foo() attributes { defname = "Bar" }

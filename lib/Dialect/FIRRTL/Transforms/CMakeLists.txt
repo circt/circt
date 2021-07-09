@@ -7,6 +7,7 @@ add_circt_dialect_library(CIRCTFIRRTLTransforms
   GrandCentralTaps.cpp
   IMConstProp.cpp
   InferWidths.cpp
+  InferResets.cpp
   LowerTypes.cpp
   LowerBundleVectorTypes.cpp
   ModuleInliner.cpp
