@@ -11,6 +11,7 @@ add_circt_dialect_library(CIRCTFIRRTLTransforms
   LowerBundleVectorTypes.cpp
   ModuleInliner.cpp
   PrintInstanceGraph.cpp
+  CheckCombCycles.cpp
 
   DEPENDS
   CIRCTFIRRTLTransformsIncGen
