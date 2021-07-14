@@ -232,3 +232,219 @@ hw.module @compareConcatEliminationFalseCases(%arg0 : i4, %arg1: i9, %arg2: i7) 
   %o = comb.or %2, %3, %4, %5, %6 : i1
   hw.output %o : i1
 }
+
+// Validates that extract(cat(a, b, c)) -> cat(b, c) when it aligns with the exact elements, or simply
+// a when it is a single full element.
+// CHECK-LABEL: hw.module @extractCatAlignWithExactElements
+hw.module @extractCatAlignWithExactElements(%arg0: i8, %arg1: i9, %arg2: i10) -> (%o1 : i17, %o2: i19, %o3: i9, %o4: i10) {
+  %0 = comb.concat %arg0, %arg1, %arg2 : (i8, i9, i10) -> i27
+
+  // CHECK-NEXT:    [[R0:%.+]] = comb.concat %arg0, %arg1
+  %1 = comb.extract %0 from 10 : (i27) -> i17
+
+  // CHECK-NEXT:    [[R1:%.+]] = comb.concat %arg1, %arg2
+  %2 = comb.extract %0 from 0 : (i27) -> i19
+  %3 = comb.extract %0 from 10 : (i27) -> i9
+  %4 = comb.extract %0 from 0 : (i27) -> i10
+
+  // CHECK-NEXT:    hw.output [[R0]], [[R1]], %arg1, %arg2
+  hw.output %1, %2, %3, %4 : i17, i19, i9, i10
+}
+
+// Validates that extract(cat(a, b, c)) -> cat(extract(b)) when it matches only on a single
+// partial element
+// CHECK-LABEL: hw.module @extractCatOnSinglePartialElement
+hw.module @extractCatOnSinglePartialElement(%arg0: i8, %arg1: i9, %arg2: i10) -> (%o1 : i1, %o2: i1, %o3: i1, %o4: i1) {
+  %0 = comb.concat %arg0, %arg1, %arg2 : (i8, i9, i10) -> i27
+
+  // From the first bit position
+  // CHECK-NEXT:    [[R0:%.+]] = comb.extract %arg2 from 0 : (i10) -> i1
+  %1 = comb.extract %0 from 0 : (i27) -> i1
+
+  // From the last bit position
+  // CHECK-NEXT:    [[R1:%.+]] = comb.extract %arg2 from 9 : (i10) -> i1
+  %2 = comb.extract %0 from 9 : (i27) -> i1
+
+  // From some middling position
+  // CHECK-NEXT:    [[R2:%.+]] = comb.extract %arg2 from 5 : (i10) -> i1
+  %3 = comb.extract %0 from 5 : (i27) -> i1
+
+  // From the first bit position on non-first element.
+  // CHECK-NEXT:    [[R3:%.]] = comb.extract %arg1 from 0 : (i9) -> i1
+  %4 = comb.extract %0 from 10 : (i27) -> i1
+
+  // CHECK-NEXT:    hw.output [[R0]], [[R1]], [[R2]], [[R3]]
+  hw.output %1, %2, %3, %4 : i1, i1, i1, i1
+}
+
+// Validates theat extract(cat(a, b, c)) -> cat(extract(..), .., extract(..)). A few
+// things to validate here:
+// - extract is only inserted at elements that require it
+// - no zero-elements introduced
+// - the order of the elements are correct.
+// CHECK-LABEL: hw.module @extractCatOnMultiplePartialElements
+hw.module @extractCatOnMultiplePartialElements(%arg0: i8, %arg1: i9, %arg2: i10) -> (%o1 : i11, %o2 : i5) {
+  %0 = comb.concat %arg0, %arg1, %arg2 : (i8, i9, i10) -> i27
+
+  // Part of arg0, all of arg1, part of arg2
+  // CHECK-NEXT: [[FROMARG2:%.+]] = comb.extract %arg2 from 9 : (i10) -> i1
+  // CHECK-NEXT: [[FROMARG0:%.+]] = comb.extract %arg0 from 0 : (i8) -> i1
+  // CHECK-NEXT: [[RESULT1:%.+]] = comb.concat [[FROMARG0]], %arg1, [[FROMARG2]] : (i1, i9, i1) -> i11
+  %1 = comb.extract %0 from 9 : (i27) -> i11
+
+  // Part of arg1 and part of arg2
+  // CHECK-NEXT: [[FROMARG2:%.+]] = comb.extract %arg2 from 9 : (i10) -> i1
+  // CHECK-NEXT: [[FROMARG1:%.+]] = comb.extract %arg1 from 0 : (i9) -> i4
+  // CHECK-NEXT: [[RESULT2:%.+]] = comb.concat [[FROMARG1]], [[FROMARG2]] : (i4, i1) -> i5
+  %2 = comb.extract %0 from 9 : (i27) -> i5
+
+  // CHECK-NEXT: hw.output [[RESULT1:%.+]], [[RESULT2:%.+]]
+  hw.output %1, %2 : i11, i5
+}
+
+// Validates that addition narrows the operand widths to the width of the
+// single extract usage.
+// CHECK-LABEL: hw.module @narrowAdditionSingleExtractUse
+hw.module @narrowAdditionSingleExtractUse(%x: i8, %y: i8) -> (%z1: i6) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i6
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i6
+  // CHECK-NEXT: [[RESULT:%.+]] = comb.add [[RX]], [[RY]] : i6
+  // CHECK-NEXT: hw.output [[RESULT]]
+
+  %false = hw.constant false
+  %0 = comb.concat %false, %x : (i1, i8) -> i9
+  %1 = comb.concat %false, %y : (i1, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i6
+  hw.output %3 : i6
+}
+
+// Validates that addition narrows to the element itself without an extract
+// where possible.
+// CHECK-LABEL: hw.module @narrowAdditionToDirectAddition
+hw.module @narrowAdditionToDirectAddition(%x: i8, %y: i8) -> (%z1: i8) {
+  // CHECK-NEXT: [[RESULT:%.+]] = comb.add %x, %y : i8
+  // CHECK-NEXT: hw.output [[RESULT]]
+
+  %false = hw.constant false
+  %0 = comb.concat %x, %x : (i8, i8) -> i16
+  %1 = comb.concat %y, %y : (i8, i8) -> i16
+  %2 = comb.add %0, %1 : i16
+  %3 = comb.extract %2 from 0 : (i16) -> i8
+  hw.output %3 : i8
+}
+
+// Validates that addition narrow to the widest extract
+// CHECK-LABEL: hw.module @narrowAdditionToWidestExtract
+hw.module @narrowAdditionToWidestExtract(%x: i8, %y: i8) -> (%z1: i3, %z2: i4) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i4
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i4
+  // CHECK-NEXT: [[RESULT2:%.+]] = comb.add [[RX]], [[RY]] : i4
+  // CHECK-NEXT: [[RESULT1:%.+]] = comb.extract [[RESULT2]] from 0 : (i4) -> i3
+  // CHECK-NEXT: hw.output [[RESULT1]], [[RESULT2]]
+
+  %0 = comb.concat %x, %x : (i8, i8) -> i9
+  %1 = comb.concat %y, %y : (i8, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i3
+  %4 = comb.extract %2 from 0 : (i9) -> i4
+  hw.output %3, %4 : i3, i4
+}
+
+// Validates that addition narrow to the widest extract
+// CHECK-LABEL: hw.module @narrowAdditionStripLeadingZero
+hw.module @narrowAdditionStripLeadingZero(%x: i8, %y: i8) -> (%z: i8) {
+  // CHECK-NEXT: [[RESULT:%.+]] = comb.add %x, %y : i8
+  // CHECK-NEXT: hw.output [[RESULT]]
+
+  %false = hw.constant false
+  %0 = comb.concat %false, %x : (i1, i8) -> i9
+  %1 = comb.concat %false, %y : (i1, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i8
+  hw.output %3 : i8
+}
+
+// Validates that addition narrowing does not happen when the width of the
+// largest use is as wide as the addition result itself.
+// CHECK-LABEL: hw.module @narrowAdditionRetainOriginal
+hw.module @narrowAdditionRetainOriginal(%x: i8, %y: i8) -> (%z0: i9, %z1: i8) {
+  // CHECK-NEXT: false = hw.constant false
+  // CHECK-NEXT: %0 = comb.concat %false, %x : (i1, i8) -> i9
+  // CHECK-NEXT: %1 = comb.concat %false, %y : (i1, i8) -> i9
+  // CHECK-NEXT: %2 = comb.add %0, %1 : i9
+  // CHECK-NEXT: %3 = comb.extract %2 from 0 : (i9) -> i8
+  // CHECK-NEXT: hw.output %2, %3 : i9, i8
+
+  %false = hw.constant false
+  %0 = comb.concat %false, %x : (i1, i8) -> i9
+  %1 = comb.concat %false, %y : (i1, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i8
+  hw.output %2, %3 : i9, i8
+}
+
+// Validates that addition narrowing retains the lower bits when not extracting from
+// zero.
+// CHECK-LABEL: hw.module @narrowAdditionExtractFromNoneZero
+hw.module @narrowAdditionExtractFromNoneZero(%x: i8, %y: i8) -> (%z0: i4) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i5
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i5
+  // CHECK-NEXT: [[ADD:%.+]] = comb.add [[RX]], [[RY]] : i5
+  // CHECK-NEXT: [[RET:%.+]] = comb.extract [[ADD]] from 1 : (i5) -> i4
+  // CHECK-NEXT: hw.output [[RET]]
+
+  %0 = comb.add %x, %y : i8
+  %1 = comb.extract %0 from 1 : (i8) -> i4
+  hw.output %1 : i4
+}
+
+// Validates that subtraction narrowing retains the lower bits when not extracting from
+// zero.
+// CHECK-LABEL: hw.module @narrowSubExtractFromNoneZero
+hw.module @narrowSubExtractFromNoneZero(%x: i8, %y: i8) -> (%z0: i4) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i5
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i5
+  // CHECK-NEXT: [[ADD:%.+]] = comb.sub [[RX]], [[RY]] : i5
+  // CHECK-NEXT: [[RET:%.+]] = comb.extract [[ADD]] from 1 : (i5) -> i4
+  // CHECK-NEXT: hw.output [[RET]]
+
+  %0 = comb.sub %x, %y : i8
+  %1 = comb.extract %0 from 1 : (i8) -> i4
+  hw.output %1 : i4
+}
+
+// Validates that bitwise operation does not retain the lower bit when extracting from
+// non-zero.
+// CHECK-LABEL: hw.module @narrowBitwiseOpsExtractFromNoneZero
+hw.module @narrowBitwiseOpsExtractFromNoneZero(%a: i8, %b: i8, %c: i8, %d: i1) -> (%w: i4, %x: i4, %y: i4, %z: i4) {
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RC:%.+]] = comb.extract %c from 1 : (i8) -> i4
+  // CHECK-NEXT: [[AND:%.+]] = comb.and [[RA]], [[RB]], [[RC]] : i4
+  %0 = comb.and %a, %b, %c : i8
+  %1 = comb.extract %0 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RC:%.+]] = comb.extract %c from 1 : (i8) -> i4
+  // CHECK-NEXT: [[OR:%.+]] = comb.or [[RA]], [[RB]], [[RC]] : i4
+  %2 = comb.or %a, %b, %c : i8
+  %3 = comb.extract %2 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RC:%.+]] = comb.extract %c from 1 : (i8) -> i4
+  // CHECK-NEXT: [[XOR:%.+]] = comb.xor [[RA]], [[RB]], [[RC]] : i4
+  %4 = comb.xor %a, %b, %c : i8
+  %5 = comb.extract %4 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[MUX:%.+]] = comb.mux %d, [[RA]], [[RB]] : i4
+  %6 = comb.mux %d, %a, %b : i8
+  %7 = comb.extract %6 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: hw.output [[AND]], [[OR]], [[XOR]], [[MUX]]
+  hw.output %1, %3, %5, %7 : i4, i4, i4, i4
+}
