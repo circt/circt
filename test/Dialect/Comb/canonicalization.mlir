@@ -394,7 +394,57 @@ hw.module @narrowAdditionExtractFromNoneZero(%x: i8, %y: i8) -> (%z0: i4) {
   // CHECK-NEXT: [[RET:%.+]] = comb.extract [[ADD]] from 1 : (i5) -> i4
   // CHECK-NEXT: hw.output [[RET]]
 
-  %2 = comb.add %x, %y : i8
+  %0 = comb.add %x, %y : i8
+  %1 = comb.extract %0 from 1 : (i8) -> i4
+  hw.output %1 : i4
+}
+
+// Validates that subtraction narrowing retains the lower bits when not extracting from
+// zero.
+// CHECK-LABEL: hw.module @narrowSubExtractFromNoneZero
+hw.module @narrowSubExtractFromNoneZero(%x: i8, %y: i8) -> (%z0: i4) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i5
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i5
+  // CHECK-NEXT: [[ADD:%.+]] = comb.sub [[RX]], [[RY]] : i5
+  // CHECK-NEXT: [[RET:%.+]] = comb.extract [[ADD]] from 1 : (i5) -> i4
+  // CHECK-NEXT: hw.output [[RET]]
+
+  %0 = comb.sub %x, %y : i8
+  %1 = comb.extract %0 from 1 : (i8) -> i4
+  hw.output %1 : i4
+}
+
+// Validates that bitwise operation does not retain the lower bit when extracting from
+// non-zero.
+// CHECK-LABEL: hw.module @narrowBitwiseOpsExtractFromNoneZero
+hw.module @narrowBitwiseOpsExtractFromNoneZero(%a: i8, %b: i8, %c: i8, %d: i1) -> (%w: i4, %x: i4, %y: i4, %z: i4) {
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RC:%.+]] = comb.extract %c from 1 : (i8) -> i4
+  // CHECK-NEXT: [[AND:%.+]] = comb.and [[RA]], [[RB]], [[RC]] : i4
+  %0 = comb.and %a, %b, %c : i8
+  %1 = comb.extract %0 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RC:%.+]] = comb.extract %c from 1 : (i8) -> i4
+  // CHECK-NEXT: [[OR:%.+]] = comb.or [[RA]], [[RB]], [[RC]] : i4
+  %2 = comb.or %a, %b, %c : i8
   %3 = comb.extract %2 from 1 : (i8) -> i4
-  hw.output %3 : i4
+
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RC:%.+]] = comb.extract %c from 1 : (i8) -> i4
+  // CHECK-NEXT: [[XOR:%.+]] = comb.xor [[RA]], [[RB]], [[RC]] : i4
+  %4 = comb.xor %a, %b, %c : i8
+  %5 = comb.extract %4 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: [[RA:%.+]] = comb.extract %a from 1 : (i8) -> i4
+  // CHECK-NEXT: [[RB:%.+]] = comb.extract %b from 1 : (i8) -> i4
+  // CHECK-NEXT: [[MUX:%.+]] = comb.mux %d, [[RA]], [[RB]] : i4
+  %6 = comb.mux %d, %a, %b : i8
+  %7 = comb.extract %6 from 1 : (i8) -> i4
+
+  // CHECK-NEXT: hw.output [[AND]], [[OR]], [[XOR]], [[MUX]]
+  hw.output %1, %3, %5, %7 : i4, i4, i4, i4
 }

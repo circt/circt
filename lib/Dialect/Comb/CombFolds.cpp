@@ -73,43 +73,82 @@ static bool tryFlatteningOperands(Op op, PatternRewriter &rewriter) {
   return false;
 }
 
-template <class Op>
-static bool narrowArithmeticOperations(Op op, ValueRange inputs,
-                                       PatternRewriter &rewriter) {
-  auto originalOpWidth = op.getType().getWidth();
-  size_t largestWidth = 0;
+template <class Op, class F>
+static bool narrowOperationWidth(Op op, ValueRange inputs,
+                                 bool narrowTrailingBits,
+                                 PatternRewriter &rewriter, F createOp) {
+  auto originalOpWidth = op.getType().getIntOrFloatBitWidth();
+  size_t highestBitRequired = 0;
 
-  for (auto &use : op.getOperation()->getUses()) {
+  // when we don't want to narrowTrailingBits (namely in arithmetic
+  // operations), forcing lowestBitRequired = 0
+  size_t lowestBitRequired = narrowTrailingBits ? SIZE_MAX : 0;
+  auto uses = op.getOperation()->getUses();
+
+  // If the result is never used, no point optimizing this. It will
+  // also complicated error handling in code that follows.
+  if (uses.empty()) {
+    return false;
+  }
+
+  for (auto &use : uses) {
     if (auto extractOp = dyn_cast<ExtractOp>(use.getOwner())) {
-      size_t relevantOperandWidth =
-          extractOp.getType().getWidth() + extractOp.lowBit();
-      largestWidth = std::max(largestWidth, relevantOperandWidth);
+      size_t lowBit = extractOp.lowBit();
+      size_t highBit = extractOp.getType().getWidth() + lowBit - 1;
+      highestBitRequired = std::max(highestBitRequired, highBit);
+      lowestBitRequired = std::min(lowestBitRequired, lowBit);
       continue;
     }
 
-    largestWidth = originalOpWidth;
+    highestBitRequired = originalOpWidth - 1;
+    lowestBitRequired = 0;
     break;
   }
 
-  if (largestWidth != 0 && largestWidth < originalOpWidth) {
+  if (lowestBitRequired != 0 || highestBitRequired != originalOpWidth - 1) {
     auto loc = op.getLoc();
-    auto narrowedType = IntegerType::get(rewriter.getContext(), largestWidth);
+    auto createZero = [&](size_t width) {
+      Type leadingZerosType = IntegerType::get(rewriter.getContext(), width);
+      return rewriter.create<hw::ConstantOp>(loc, leadingZerosType, 0);
+    };
+    SmallVector<Value, 3> concatArgs;
+
+    size_t leadingZeroWidth = originalOpWidth - highestBitRequired - 1;
+    if (leadingZeroWidth != 0) {
+      concatArgs.push_back(createZero(leadingZeroWidth));
+    }
+
+    auto narrowedType = IntegerType::get(
+        rewriter.getContext(), highestBitRequired - lowestBitRequired + 1);
     auto narrowedInputs =
         SmallVector<Value>(llvm::map_range(inputs, [&](auto input) {
-          return rewriter.create<ExtractOp>(loc, narrowedType, input, 0);
+          return rewriter.create<ExtractOp>(loc, narrowedType, input,
+                                            lowestBitRequired);
         }));
+    Value narrowedOperation = createOp(narrowedInputs);
+    concatArgs.push_back(narrowedOperation);
 
-    Value narrowedAddition = rewriter.create<Op>(loc, narrowedInputs);
-    Type leadingZerosType = IntegerType::get(
-        rewriter.getContext(), op.getType().getWidth() - largestWidth);
-    Value leadingZeros =
-        rewriter.create<hw::ConstantOp>(loc, leadingZerosType, 0);
+    size_t trailingZeroWidth = lowestBitRequired;
+    if (trailingZeroWidth != 0) {
+      concatArgs.push_back(createZero(trailingZeroWidth));
+    }
 
-    rewriter.replaceOpWithNewOp<ConcatOp>(op, leadingZeros, narrowedAddition);
+    rewriter.replaceOpWithNewOp<ConcatOp>(op, concatArgs);
     return true;
   }
 
   return false;
+}
+
+template <class Op>
+static bool narrowOperationWidth(Op op, ValueRange inputs,
+                                 bool narrowTrailingBits,
+                                 PatternRewriter &rewriter) {
+  auto createOp = [&](ArrayRef<Value> args) {
+    return rewriter.create<Op>(op.getLoc(), args);
+  };
+  return narrowOperationWidth(op, inputs, narrowTrailingBits, rewriter,
+                              createOp);
 }
 
 //===----------------------------------------------------------------------===//
@@ -427,6 +466,13 @@ LogicalResult AndOp::canonicalize(AndOp op, PatternRewriter &rewriter) {
   if (tryFlatteningOperands(op, rewriter))
     return success();
 
+  // and(a, b) -> concat(0, and(a[n-1:0], b[n-1:0])), where n is the widest
+  // demanded width
+  if (narrowOperationWidth(op, inputs, /* narrowTrailingBits= */ true,
+                           rewriter)) {
+    return success();
+  }
+
   /// TODO: and(..., x, not(x)) -> and(..., 0) -- complement
   return failure();
 }
@@ -490,6 +536,13 @@ LogicalResult OrOp::canonicalize(OrOp op, PatternRewriter &rewriter) {
   // or(x, or(...)) -> or(x, ...) -- flatten
   if (tryFlatteningOperands(op, rewriter))
     return success();
+
+  // or(a, b) -> concat(0, or(a[n-1:0], b[n-1:0])), where n is the widest
+  // demanded
+  if (narrowOperationWidth(op, inputs, /* narrowTrailingBits= */ true,
+                           rewriter)) {
+    return success();
+  }
 
   /// TODO: or(..., x, not(x)) -> or(..., '1) -- complement
   return failure();
@@ -561,6 +614,13 @@ LogicalResult XorOp::canonicalize(XorOp op, PatternRewriter &rewriter) {
   if (tryFlatteningOperands(op, rewriter))
     return success();
 
+  // xor(a, b) -> concat(0, xor(a[n-1:0], b[n-1:0])), where n is the widest
+  // demanded width
+  if (narrowOperationWidth(op, inputs, /* narrowTrailingBits= */ true,
+                           rewriter)) {
+    return success();
+  }
+
   return failure();
 }
 
@@ -597,7 +657,10 @@ LogicalResult SubOp::canonicalize(SubOp op, PatternRewriter &rewriter) {
     return success();
   }
 
-  if (narrowArithmeticOperations(op, {op.lhs(), op.rhs()}, rewriter)) {
+  // sub(a, b) -> concat(0, sub(a[n-1:0], b[n-1:0])), where n is the widest
+  // demanded width
+  if (narrowOperationWidth(op, {op.lhs(), op.rhs()},
+                           /*narrowTrailingBits=*/false, rewriter)) {
     return success();
   }
 
@@ -692,7 +755,9 @@ LogicalResult AddOp::canonicalize(AddOp op, PatternRewriter &rewriter) {
     return success();
   }
 
-  if (narrowArithmeticOperations(op, op.inputs(), rewriter)) {
+  // add(a, b) -> add(a[n-1:0], b[n-1:0]), where n is the widest demanded width
+  if (narrowOperationWidth(op, op.inputs(), /*narrowTrailingBits=*/false,
+                           rewriter)) {
     return success();
   }
 
@@ -1047,6 +1112,21 @@ LogicalResult MuxOp::canonicalize(MuxOp op, PatternRewriter &rewriter) {
       Value newT = trueCase.trueValue();
       Value newF = op.falseValue();
       rewriter.replaceOpWithNewOp<MuxOp>(op, op.cond(), newT, newF);
+    }
+  }
+
+  // mux(cond, t, f) -> concat(0, mux(cond, t[n-1:0], f[n-1:0])), where n is the
+  // widest demanded width
+  if (auto muxValueIntegerType = op.getType().dyn_cast<IntegerType>()) {
+    auto createMuxOp = [&](ArrayRef<Value> values) {
+      return rewriter.create<MuxOp>(op.getLoc(), op.cond(), values[0],
+                                    values[1]);
+    };
+
+    if (narrowOperationWidth(op, {op.trueValue(), op.falseValue()},
+                             /* narrowTrailingBits= */ true, rewriter,
+                             createMuxOp)) {
+      return success();
     }
   }
 
