@@ -301,3 +301,100 @@ hw.module @extractCatOnMultiplePartialElements(%arg0: i8, %arg1: i9, %arg2: i10)
   // CHECK-NEXT: hw.output [[RESULT1:%.+]], [[RESULT2:%.+]]
   hw.output %1, %2 : i11, i5
 }
+
+// Validates that addition narrows the operand widths to the width of the
+// single extract usage.
+// CHECK-LABEL: hw.module @narrowAdditionSingleExtractUse
+hw.module @narrowAdditionSingleExtractUse(%x: i8, %y: i8) -> (%z1: i6) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i6
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i6
+  // CHECK-NEXT: [[RESULT:%.+]] = comb.add [[RX]], [[RY]] : i6
+  // CHECK-NEXT: hw.output [[RESULT]]
+
+  %false = hw.constant false
+  %0 = comb.concat %false, %x : (i1, i8) -> i9
+  %1 = comb.concat %false, %y : (i1, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i6
+  hw.output %3 : i6
+}
+
+// Validates that addition narrows to the element itself without an extract
+// where possible.
+// CHECK-LABEL: hw.module @narrowAdditionToDirectAddition
+hw.module @narrowAdditionToDirectAddition(%x: i8, %y: i8) -> (%z1: i8) {
+  // CHECK-NEXT: [[RESULT:%.+]] = comb.add %x, %y : i8
+  // CHECK-NEXT: hw.output [[RESULT]]
+
+  %false = hw.constant false
+  %0 = comb.concat %x, %x : (i8, i8) -> i16
+  %1 = comb.concat %y, %y : (i8, i8) -> i16
+  %2 = comb.add %0, %1 : i16
+  %3 = comb.extract %2 from 0 : (i16) -> i8
+  hw.output %3 : i8
+}
+
+// Validates that addition narrow to the widest extract
+// CHECK-LABEL: hw.module @narrowAdditionToWidestExtract
+hw.module @narrowAdditionToWidestExtract(%x: i8, %y: i8) -> (%z1: i3, %z2: i4) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i4
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i4
+  // CHECK-NEXT: [[RESULT2:%.+]] = comb.add [[RX]], [[RY]] : i4
+  // CHECK-NEXT: [[RESULT1:%.+]] = comb.extract [[RESULT2]] from 0 : (i4) -> i3
+  // CHECK-NEXT: hw.output [[RESULT1]], [[RESULT2]]
+
+  %0 = comb.concat %x, %x : (i8, i8) -> i9
+  %1 = comb.concat %y, %y : (i8, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i3
+  %4 = comb.extract %2 from 0 : (i9) -> i4
+  hw.output %3, %4 : i3, i4
+}
+
+// Validates that addition narrow to the widest extract
+// CHECK-LABEL: hw.module @narrowAdditionStripLeadingZero
+hw.module @narrowAdditionStripLeadingZero(%x: i8, %y: i8) -> (%z: i8) {
+  // CHECK-NEXT: [[RESULT:%.+]] = comb.add %x, %y : i8
+  // CHECK-NEXT: hw.output [[RESULT]]
+
+  %false = hw.constant false
+  %0 = comb.concat %false, %x : (i1, i8) -> i9
+  %1 = comb.concat %false, %y : (i1, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i8
+  hw.output %3 : i8
+}
+
+// Validates that addition narrowing does not happen when the width of the
+// largest use is as wide as the addition result itself.
+// CHECK-LABEL: hw.module @narrowAdditionRetainOriginal
+hw.module @narrowAdditionRetainOriginal(%x: i8, %y: i8) -> (%z0: i9, %z1: i8) {
+  // CHECK-NEXT: false = hw.constant false
+  // CHECK-NEXT: %0 = comb.concat %false, %x : (i1, i8) -> i9
+  // CHECK-NEXT: %1 = comb.concat %false, %y : (i1, i8) -> i9
+  // CHECK-NEXT: %2 = comb.add %0, %1 : i9
+  // CHECK-NEXT: %3 = comb.extract %2 from 0 : (i9) -> i8
+  // CHECK-NEXT: hw.output %2, %3 : i9, i8
+
+  %false = hw.constant false
+  %0 = comb.concat %false, %x : (i1, i8) -> i9
+  %1 = comb.concat %false, %y : (i1, i8) -> i9
+  %2 = comb.add %0, %1 : i9
+  %3 = comb.extract %2 from 0 : (i9) -> i8
+  hw.output %2, %3 : i9, i8
+}
+
+// Validates that addition narrowing retains the lower bits when not extracting from
+// zero.
+// CHECK-LABEL: hw.module @narrowAdditionExtractFromNoneZero
+hw.module @narrowAdditionExtractFromNoneZero(%x: i8, %y: i8) -> (%z0: i4) {
+  // CHECK-NEXT: [[RX:%.+]] = comb.extract %x from 0 : (i8) -> i5
+  // CHECK-NEXT: [[RY:%.+]] = comb.extract %y from 0 : (i8) -> i5
+  // CHECK-NEXT: [[ADD:%.+]] = comb.add [[RX]], [[RY]] : i5
+  // CHECK-NEXT: [[RET:%.+]] = comb.extract [[ADD]] from 1 : (i5) -> i4
+  // CHECK-NEXT: hw.output [[RET]]
+
+  %2 = comb.add %x, %y : i8
+  %3 = comb.extract %2 from 1 : (i8) -> i4
+  hw.output %3 : i4
+}

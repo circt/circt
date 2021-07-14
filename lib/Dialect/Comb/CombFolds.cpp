@@ -73,6 +73,45 @@ static bool tryFlatteningOperands(Op op, PatternRewriter &rewriter) {
   return false;
 }
 
+template <class Op>
+static bool narrowArithmeticOperations(Op op, ValueRange inputs,
+                                       PatternRewriter &rewriter) {
+  auto originalOpWidth = op.getType().getWidth();
+  size_t largestWidth = 0;
+
+  for (auto &use : op.getOperation()->getUses()) {
+    if (auto extractOp = dyn_cast<ExtractOp>(use.getOwner())) {
+      size_t relevantOperandWidth =
+          extractOp.getType().getWidth() + extractOp.lowBit();
+      largestWidth = std::max(largestWidth, relevantOperandWidth);
+      continue;
+    }
+
+    largestWidth = originalOpWidth;
+    break;
+  }
+
+  if (largestWidth != 0 && largestWidth < originalOpWidth) {
+    auto loc = op.getLoc();
+    auto narrowedType = IntegerType::get(rewriter.getContext(), largestWidth);
+    auto narrowedInputs =
+        SmallVector<Value>(llvm::map_range(inputs, [&](auto input) {
+          return rewriter.create<ExtractOp>(loc, narrowedType, input, 0);
+        }));
+
+    Value narrowedAddition = rewriter.create<Op>(loc, narrowedInputs);
+    Type leadingZerosType = IntegerType::get(
+        rewriter.getContext(), op.getType().getWidth() - largestWidth);
+    Value leadingZeros =
+        rewriter.create<hw::ConstantOp>(loc, leadingZerosType, 0);
+
+    rewriter.replaceOpWithNewOp<ConcatOp>(op, leadingZeros, narrowedAddition);
+    return true;
+  }
+
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // Unary Operations
 //===----------------------------------------------------------------------===//
@@ -558,6 +597,10 @@ LogicalResult SubOp::canonicalize(SubOp op, PatternRewriter &rewriter) {
     return success();
   }
 
+  if (narrowArithmeticOperations(op, {op.lhs(), op.rhs()}, rewriter)) {
+    return success();
+  }
+
   return failure();
 }
 
@@ -646,6 +689,10 @@ LogicalResult AddOp::canonicalize(AddOp op, PatternRewriter &rewriter) {
 
   // add(x, add(...)) -> add(x, ...) -- flatten
   if (tryFlatteningOperands(op, rewriter)) {
+    return success();
+  }
+
+  if (narrowArithmeticOperations(op, op.inputs(), rewriter)) {
     return success();
   }
 
