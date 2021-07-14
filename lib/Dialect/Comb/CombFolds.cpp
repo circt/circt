@@ -120,11 +120,11 @@ static bool narrowOperationWidth(Op op, ValueRange inputs,
 
     auto narrowedType = IntegerType::get(
         rewriter.getContext(), highestBitRequired - lowestBitRequired + 1);
-    auto narrowedInputs =
-        SmallVector<Value>(llvm::map_range(inputs, [&](auto input) {
-          return rewriter.create<ExtractOp>(loc, narrowedType, input,
-                                            lowestBitRequired);
-        }));
+    SmallVector<Value, 4> narrowedInputs(inputs.size());
+    llvm::transform(inputs, narrowedInputs.begin(), [&](auto input) {
+        return rewriter.create<ExtractOp>(loc, narrowedType, input,
+            lowestBitRequired);
+        });
     Value narrowedOperation = createOp(narrowedInputs);
     concatArgs.push_back(narrowedOperation);
 
@@ -1118,7 +1118,8 @@ LogicalResult MuxOp::canonicalize(MuxOp op, PatternRewriter &rewriter) {
   // mux(cond, t, f) -> concat(0, mux(cond, t[n-1:0], f[n-1:0])), where n is the
   // widest demanded width
   if (auto muxValueIntegerType = op.getType().dyn_cast<IntegerType>()) {
-    auto createMuxOp = [&](ArrayRef<Value> values) {
+    auto createMuxOp = [&](ArrayRef<Value> values) -> Value {
+      assert(values.size() == 2 && "createMuxOp expects exactly two elements");
       return rewriter.create<MuxOp>(op.getLoc(), op.cond(), values[0],
                                     values[1]);
     };
