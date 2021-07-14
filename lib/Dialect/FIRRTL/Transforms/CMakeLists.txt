@@ -17,6 +17,7 @@ add_circt_dialect_library(CIRCTFIRRTLTransforms
 
   LINK_LIBS PUBLIC
   CIRCTFIRRTL
+  CIRCTImportFIRRTL
   CIRCTHW
   CIRCTSV
   CIRCTSupport

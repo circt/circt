@@ -116,6 +116,10 @@ firrtl.circuit "TestHarness" attributes {
   // CHECK-SAME: out %_2: !firrtl.uint<1>
   // CHECK-SAME: out %_1: !firrtl.clock
   // CHECK-SAME: out %_0: !firrtl.uint<1>
+  // CHECK-NEXT: [[V8:%.+]] = firrtl.constant 0 : !firrtl.uint<1>
+  // CHECK-NEXT: firrtl.connect %_8, [[V8]]
+  // CHECK-NEXT: [[V7:%.+]] = firrtl.constant 42 : !firrtl.uint<8>
+  // CHECK-NEXT: firrtl.connect %_7, [[V7]]
   // CHECK-NEXT: [[V6:%.+]] = firrtl.verbatim.expr "foo.bar.regreset"
   // CHECK-NEXT: firrtl.connect %_6, [[V6]]
   // CHECK-NEXT: [[V5:%.+]] = firrtl.verbatim.expr "foo.bar.reg"
@@ -131,6 +135,16 @@ firrtl.circuit "TestHarness" attributes {
   // CHECK-NEXT: [[V0:%.+]] = firrtl.verbatim.expr "foo.bar.wire"
   // CHECK-NEXT: firrtl.connect %_0, [[V0]]
   firrtl.extmodule @DataTap(
+    out %_8: !firrtl.uint<1> {firrtl.annotations = [{
+        class = "sifive.enterprise.grandcentral.LiteralDataTapKey",
+        literal = "UInt<1>(\"h0\")",
+        id = 0 : i64,
+        portID = 9 : i64 }]},
+    out %_7: !firrtl.uint<8> {firrtl.annotations = [{
+        class = "sifive.enterprise.grandcentral.LiteralDataTapKey",
+        literal = "UInt<8>(42)",
+        id = 0 : i64,
+        portID = 8 : i64 }]},
     out %_6: !firrtl.uint<1> {firrtl.annotations = [{
       class = "sifive.enterprise.grandcentral.ReferenceDataTapKey",
       id = 0 : i64,
@@ -210,7 +224,7 @@ firrtl.circuit "TestHarness" attributes {
     firrtl.connect %out, %foo_out : !firrtl.uint<1>, !firrtl.uint<1>
     firrtl.instance @BlackHole {name = "bigScary"}
     // CHECK: firrtl.instance [[DT]] {name = "dataTap"}
-    %DataTap_6, %DataTap_5, %DataTap_4, %DataTap_3, %DataTap_2, %DataTap_1, %DataTap_0 = firrtl.instance @DataTap {name = "dataTap"} : !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.clock, !firrtl.uint<1>
+    %DataTap_8, %DataTap_7, %DataTap_6, %DataTap_5, %DataTap_4, %DataTap_3, %DataTap_2, %DataTap_1, %DataTap_0 = firrtl.instance @DataTap {name = "dataTap"} : !firrtl.uint<1>, !firrtl.uint<8>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.uint<1>, !firrtl.clock, !firrtl.uint<1>
     // CHECK: firrtl.instance [[MT]] {name = "memTap"}
     %MemTap_mem_0, %MemTap_mem_1 = firrtl.instance @MemTap {name = "memTap"} : !firrtl.uint<1>, !firrtl.uint<1>
   }
