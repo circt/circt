@@ -264,11 +264,34 @@ static LogicalResult verifyComponentOp(ComponentOp op) {
     else if (isa<ControlOp>(bodyOp))
       ++numControl;
   }
-  if (numWires == 1 && numControl == 1)
-    return success();
+  if (!(numWires == 1 && numControl == 1))
+    return op.emitOpError() << "requires exactly one of each: "
+                               "'calyx.wires', 'calyx.control'.";
 
-  return op.emitOpError() << "requires exactly one of each: "
-                             "'calyx.wires', 'calyx.control'.";
+  // Verify the component has the following ports.
+  // TODO(Calyx): Eventually, we want to use either types for these,
+  //  e.g. `calyx.clk_type` or attributes for passes.
+  bool go = false, clk = false, reset = false, done = false;
+  SmallVector<ComponentPortInfo> componentPorts = getComponentPortInfo(op);
+  for (auto port : componentPorts) {
+    if (!port.type.isInteger(1))
+      // Each of the ports has bit width 1.
+      continue;
+
+    // TODO(Calyx): Remove drop_front() when llvm/circt:#1406 is merged.
+    StringRef portName = port.name.getValue().drop_front();
+    if (port.direction == PortDirection::OUTPUT) {
+      done |= (portName == "done");
+    } else {
+      go |= (portName == "go");
+      clk |= (portName == "clk");
+      reset |= (portName == "reset");
+    }
+    if (go && clk && reset && done)
+      return success();
+  }
+  return op->emitOpError() << "does not have required 1-bit input ports `go`, "
+                              "`clk`, `reset`, and output port `done`";
 }
 
 //===----------------------------------------------------------------------===//
