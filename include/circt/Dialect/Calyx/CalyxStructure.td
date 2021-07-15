@@ -131,6 +131,7 @@ def WiresOp : CalyxContainer<"wires", [
 }
 
 def CellOp : CalyxOp<"cell", [
+    DeclareOpInterfaceMethods<OpAsmOpInterface>,
     HasParent<"ComponentOp">
   ]> {
   let summary = "Calyx Cell";
@@ -140,7 +141,7 @@ def CellOp : CalyxOp<"cell", [
     optionally have parameters attributed to them.
 
     ```mlir
-      %in1, %out1 = calyx.cell "name" @MyComponent : i64, i16
+      %name.in, %name.out = calyx.cell "name" @MyComponent : i64, i16
     ```
   }];
 
@@ -198,10 +199,6 @@ def GroupOp : CalyxOp<"group", [
   let assemblyFormat = "$sym_name $body attr-dict";
 }
 
-class SameTypeConstraint<string lhs, string rhs>
- : TypesMatchWith<"lhs and rhs types should be equivalent",
-                   lhs, rhs, [{ $_self }]>;
-
 def AssignOp : CalyxOp<"assign", [
     SameTypeConstraint<"dest", "src">,
     ParentOneOf<["GroupOp", "WiresOp"]>
@@ -249,7 +246,9 @@ def GroupDoneOp : CalyxGroupPort<"group_done", [
   }];
 }
 
-def GroupGoOp : CalyxGroupPort<"group_go", []> {
+def GroupGoOp : CalyxGroupPort<"group_go", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface>,
+]> {
   let summary = "Calyx Group Go Port";
   let description = [{
     The "calyx.group_go" operation represents a port on a
@@ -261,8 +260,8 @@ def GroupGoOp : CalyxGroupPort<"group_go", []> {
     receive a source until the Compile Control pass.
 
     ```mlir
-      %1 = calyx.group_go %0 : i1
-      %2 = calyx.group_go %3, %guard ? : i1
+      %group_name1.go = calyx.group_go %0 : i1
+      %group_name2.go = calyx.group_go %3, %guard ? : i1
     ```
   }];
 }
